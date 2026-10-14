@@ -1,0 +1,16 @@
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Environment variables and API keys
+.env
+.env.*
+
+# Generated data
+data/*.csv
+
+# VS Code settings
+.vscode/
