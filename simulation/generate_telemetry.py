@@ -28,10 +28,10 @@ def get_next_status(previous_status):
         }
     }
 
-    # Get possible statuses based on the previous status
+    # Get possible statuses based on previous status
     possible_statuses = status_transitions[previous_status]
 
-    # Randomly choose the next normal status
+    # Randomly select the next normal status
     next_status = str(np.random.choice(
         list(possible_statuses.keys()),
         p=list(possible_statuses.values())
@@ -52,7 +52,7 @@ def generate_telemetry(
     incident_type=None
 ):
 
-    # Generate measurements based on the robot's status
+    # Generate normal measurements based on status
     if status == "Moving":
 
         velocity = round(np.random.normal(1.2, 0.02), 3)
@@ -75,7 +75,7 @@ def generate_telemetry(
         else:
             motor_current = 0.0
 
-    # Apply abnormal measurements when an incident occurs
+    # Apply abnormal measurements during incidents
     if incident_type == "unexpected_stop":
 
         velocity = 0.0
@@ -115,7 +115,7 @@ def generate_telemetry(
 
 
 # ============================================================
-# 3. DEFINE THE ROBOT FLEET
+# 3. DEFINE ROBOT FLEET AND SIMULATION SETTINGS
 # ============================================================
 
 robots = {
@@ -140,33 +140,34 @@ incident_types = [
 # 4. CREATE INCIDENT SCHEDULES
 # ============================================================
 
-# Each robot receives a list of incident states
+# Create 100 incident states for each robot
 incident_schedules = {
     robot_id: [None] * simulation_seconds
     for robot_id in robots
 }
 
+# Store ground-truth incidents and discharge rates
 incident_log = []
 robots_discharge_rates = {}
 
-# Randomly assign at most one incident per robot
+# Randomly assign at most one incident to each robot
 for robot_id in robots:
 
+    # Select an incident or no incident
     selected_incident = np.random.choice(
         [None] + incident_types
     )
 
-    # Skip robots without incidents
     if selected_incident is None:
         continue
 
-    # Choose incident duration
+    # Randomize incident duration
     if selected_incident == "battery_discharge":
         duration = int(np.random.randint(15, 26))
     else:
         duration = int(np.random.randint(4, 9))
 
-    # Generate battery discharge severity
+    # Randomize battery discharge severity
     discharge_rate = None
 
     if selected_incident == "battery_discharge":
@@ -175,12 +176,12 @@ for robot_id in robots:
 
         robots_discharge_rates[robot_id] = discharge_rate
 
-    # Reserve additional time for recovery
+    # Reserve recovery time after unexpected stops
     recovery_duration = 5 if selected_incident == "unexpected_stop" else 0
 
     latest_start = simulation_seconds - duration - recovery_duration
 
-    # Randomly choose when the incident starts
+    # Randomly select incident start time
     start_second = int(np.random.randint(10, latest_start + 1))
 
     # Assign the incident to consecutive seconds
@@ -188,7 +189,7 @@ for robot_id in robots:
 
         incident_schedules[robot_id][second] = selected_incident
 
-    # Schedule recovery after unexpected stops
+    # Schedule recovery after an unexpected stop
     if selected_incident == "unexpected_stop":
 
         for second in range(
@@ -198,7 +199,7 @@ for robot_id in robots:
 
             incident_schedules[robot_id][second] = "recovery"
 
-    # Save ground-truth incident information
+    # Save actual incident information
     incident_log.append({
         "robot_id": robot_id,
         "incident_type": selected_incident,
@@ -216,17 +217,21 @@ telemetry_records = []
 
 for robot_id, battery_level in robots.items():
 
-    # Every robot starts in Idle mode
+    # Each robot starts in Idle mode
     previous_status = "Idle"
+
+    # Track whether the robot has just recovered
+    just_recovered = False
 
     for i in range(simulation_seconds):
 
+        # Generate timestamp
         timestamp = start_time + timedelta(seconds=i)
 
         # Check whether an incident is active
         incident_type = incident_schedules[robot_id][i]
 
-        # Decide status based on incident or normal operation
+        # Determine status based on incident or normal operation
         if incident_type == "unexpected_stop":
 
             status = "Unexpected Stop"
@@ -234,17 +239,24 @@ for robot_id, battery_level in robots.items():
         elif incident_type == "recovery":
 
             status = "Recovering"
+            just_recovered = True
 
         elif incident_type == "wheel_slip":
 
             status = "Moving"
+
+        elif just_recovered:
+
+            # Force one Idle second after recovery
+            status = "Idle"
+            just_recovered = False
 
         else:
 
             # Normal operation uses transition probabilities
             status = get_next_status(previous_status)
 
-        # Generate measurements using the selected status
+        # Generate telemetry measurements
         robot_data = generate_telemetry(
             robot_id,
             timestamp,
@@ -253,9 +265,10 @@ for robot_id, battery_level in robots.items():
             incident_type=incident_type
         )
 
+        # Save telemetry record
         telemetry_records.append(robot_data)
 
-        # Update previous status for the next second
+        # Update previous status for next iteration
         if incident_type == "unexpected_stop":
 
             previous_status = "Idle"
@@ -285,26 +298,26 @@ for robot_id, battery_level in robots.items():
 
             battery_level += 0.02
 
-        # Keep battery percentage within valid limits
+        # Keep battery between 0% and 100%
         battery_level = float(round(
             np.clip(battery_level, 0, 100), 3
         ))
 
-    # Store the robot's final battery level
+    # Save final battery level for this robot
     robots[robot_id] = battery_level
 
 
 # ============================================================
-# 6. SAVE DATASETS
+# 6. SAVE TELEMETRY AND INCIDENT DATASETS
 # ============================================================
 
-# Convert telemetry records to a DataFrame
+# Convert telemetry records into a DataFrame
 df = pd.DataFrame(telemetry_records)
 
-# Save telemetry data
+# Save telemetry dataset
 df.to_csv("data/robot_telemetry.csv", index=False)
 
-# Create the ground-truth incident DataFrame
+# Convert incident log into a DataFrame
 incident_df = pd.DataFrame(
     incident_log,
     columns=[
@@ -316,7 +329,7 @@ incident_df = pd.DataFrame(
     ]
 )
 
-# Save the incident log
+# Save incident log
 incident_df.to_csv("data/incident_log.csv", index=False)
 
 
