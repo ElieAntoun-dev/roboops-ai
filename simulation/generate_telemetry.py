@@ -1,6 +1,7 @@
 from datetime import datetime
 import numpy as np
 from datetime import datetime, timedelta
+import pandas as pd
 
 def generate_telemetry(timestamp,batterylevel):
     # Simulate the robot's operational status
@@ -50,6 +51,7 @@ def generate_telemetry(timestamp,batterylevel):
     }
     return robot_data
 
+telemetry_records = []
 
 
 # Starting timestamp
@@ -76,4 +78,14 @@ for i in range(100):
     # Keep battery between 0% and 100%
     battery_level = float(round(np.clip(battery_level, 0, 100), 3))
 
-    print(f"Record {i + 1}: {robot_data}")
+    telemetry_records.append(robot_data)
+
+# Convert the list of dictionaries into a Pandas DataFrame
+df = pd.DataFrame(telemetry_records)
+
+# Display the first five records
+print(df.head())
+# Save the DataFrame to a CSV file
+df.to_csv("data/robot_telemetry.csv", index=False)
+
+print("Telemetry successfully saved to CSV!")
