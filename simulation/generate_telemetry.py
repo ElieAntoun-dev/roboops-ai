@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import pandas as pd
 
-def generate_telemetry(robot_id, timestamp, battery_level,incident=False):
+def generate_telemetry(robot_id, timestamp, battery_level,incident=False,recovery=False):
     # Simulate the robot's operational status
     status = str(np.random.choice(
         ["Moving", "Idle", "Charging"],
@@ -42,6 +42,12 @@ def generate_telemetry(robot_id, timestamp, battery_level,incident=False):
         left_wheel_speed = 0.0
         right_wheel_speed = 0.0
         motor_current = 12.0
+    elif recovery:
+        status = "Recovering"
+        velocity = 0.0
+        left_wheel_speed = 0.0
+        right_wheel_speed = 0.0
+        motor_current = 2.0
 
     # Generate one simulated telemetry record
     robot_data = {
@@ -76,11 +82,14 @@ for robot_id, battery_level in robots.items():
     for i in range(100):
         timestamp = start_time + timedelta(seconds=i)
 
-        # Trigger an unexpected stop for AMR-03 at second 50
-        incident = robot_id == "AMR-03" and i == 50
+        # Simulate an unexpected stop from second 50 to 54
+        incident = robot_id == "AMR-03" and 50 <= i < 55
+
+        # AMR-03 recovers between seconds 55 and 59
+        recovery = robot_id == "AMR-03" and 55 <= i < 60    
 
         robot_data = generate_telemetry(
-        robot_id, timestamp, battery_level, incident=incident
+        robot_id, timestamp, battery_level, incident=incident,recovery=recovery
     )
 
         telemetry_records.append(robot_data)
@@ -110,6 +119,6 @@ df.to_csv("data/robot_telemetry.csv", index=False)
 
 print(f"Total records: {len(df)}")
 print(df["robot_id"].value_counts())
-print(df[df["status"] == "Unexpected Stop"])
+print(df[df["status"].isin(["Unexpected Stop", "Recovering"])])
 
 print("Telemetry successfully saved to CSV!")
