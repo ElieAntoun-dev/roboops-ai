@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import pandas as pd
 
-def generate_telemetry(timestamp,batterylevel):
+def generate_telemetry(robot_id, timestamp, battery_level):
     # Simulate the robot's operational status
     status = str(np.random.choice(
         ["Moving", "Idle", "Charging"],
@@ -35,13 +35,10 @@ def generate_telemetry(timestamp,batterylevel):
     else:  # Charging
         motor_current = 0.0
 
-    
-
-
     # Generate one simulated telemetry record
     robot_data = {
         "timestamp": timestamp,
-        "robot_id": "AMR-01",
+        "robot_id": robot_id,
         "velocity": velocity,
         "left_wheel_speed": left_wheel_speed,
         "right_wheel_speed": right_wheel_speed,
@@ -51,34 +48,49 @@ def generate_telemetry(timestamp,batterylevel):
     }
     return robot_data
 
-telemetry_records = []
 
+
+telemetry_records = []
 
 # Starting timestamp
 start_time = datetime.now()
 
-battery_level = 85.0
+# Define our robot fleet and initial battery levels
+robots = {
+    "AMR-01": 85.0,
+    "AMR-02": 70.0,
+    "AMR-03": 95.0,
+    "AMR-04": 60.0,
+    "AMR-05": 90.0
+}
 
-# Generate 10 telemetry records, one second apart
-for i in range(100):
-    timestamp = start_time + timedelta(seconds=i)
+# Generate 100 measurements for each robot
+for robot_id, battery_level in robots.items():
 
-    robot_data = generate_telemetry(timestamp,battery_level)
-    
-    # Update battery level based on robot status
-    if robot_data["status"] == "Moving":
-        battery_level -= 0.01
+    for i in range(100):
+        timestamp = start_time + timedelta(seconds=i)
 
-    elif robot_data["status"] == "Idle":
-        battery_level -= 0.002
+        # Generate telemetry for the current robot
+        robot_data = generate_telemetry(
+            robot_id, timestamp, battery_level
+        )
 
-    elif robot_data["status"] == "Charging":
-        battery_level += 0.02
+        telemetry_records.append(robot_data)
 
-    # Keep battery between 0% and 100%
-    battery_level = float(round(np.clip(battery_level, 0, 100), 3))
+        # Update battery level based on status
+        if robot_data["status"] == "Moving":
+            battery_level -= 0.01
 
-    telemetry_records.append(robot_data)
+        elif robot_data["status"] == "Idle":
+            battery_level -= 0.002
+
+        elif robot_data["status"] == "Charging":
+            battery_level += 0.02
+
+        battery_level = float(round(np.clip(battery_level, 0, 100), 3))
+
+    # Save the updated battery level for this robot
+    robots[robot_id] = battery_level
 
 # Convert the list of dictionaries into a Pandas DataFrame
 df = pd.DataFrame(telemetry_records)
@@ -87,5 +99,8 @@ df = pd.DataFrame(telemetry_records)
 print(df.head())
 # Save the DataFrame to a CSV file
 df.to_csv("data/robot_telemetry.csv", index=False)
+
+print(f"Total records: {len(df)}")
+print(df["robot_id"].value_counts())
 
 print("Telemetry successfully saved to CSV!")
