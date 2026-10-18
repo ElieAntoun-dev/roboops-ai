@@ -108,13 +108,15 @@ for _, incident in incident_df.iterrows():
             and (incident_data["right_wheel_speed"] < 1.0).all()
         )
 
+    
     elif incident_type == "battery_discharge":
 
-        # Battery is recorded before each second's consumption
+        # Include the record before the incident starts
         battery_values = robot_data["battery_level"].iloc[
-            start:start + duration + 1
+            start - 1:start + duration
         ]
 
+        # Calculate battery drops during the incident
         battery_drops = -battery_values.diff().dropna()
 
         expected_rate = float(incident["discharge_rate"])
@@ -127,6 +129,7 @@ for _, incident in incident_df.iterrows():
                 atol=0.001
             )
         )
+
 
     else:
         valid = False

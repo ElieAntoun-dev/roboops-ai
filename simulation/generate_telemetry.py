@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+# Set random seed for reproducible simulation results
+np.random.seed(123)
 
 
 # ============================================================
@@ -253,6 +255,14 @@ def run_simulation(robots, simulation_seconds, incident_schedules,
             else:
                 status = get_next_status(previous_status)
 
+
+            # Update battery level
+            battery_level = update_battery_level(
+                            battery_level,
+                            status,
+                            incident_type,
+                            discharge_schedules[robot_id][second])
+
             # Generate and store telemetry
             telemetry_records.append(
                 generate_telemetry(
@@ -275,13 +285,7 @@ def run_simulation(robots, simulation_seconds, incident_schedules,
                 else status
             )
 
-            # Update battery level
-            battery_level = update_battery_level(
-                battery_level,
-                status,
-                incident_type,
-                discharge_schedules[robot_id][second]
-            )
+         
 
         final_battery_levels[robot_id] = battery_level
 
@@ -334,7 +338,7 @@ if __name__ == "__main__":
 
     # Save telemetry dataset
     df = pd.DataFrame(telemetry_records)
-    df.to_csv("data/robot_telemetry.csv", index=False)
+    df.to_csv("data/robot_telemetry_test.csv", index=False)
 
     # Save ground-truth incident dataset
     incident_df = pd.DataFrame(
@@ -352,7 +356,7 @@ if __name__ == "__main__":
         by=["robot_id", "start_second"]
     )
 
-    incident_df.to_csv("data/incident_log.csv", index=False)
+    incident_df.to_csv("data/incident_log_test.csv", index=False)
 
     # Display results
     print("\nTelemetry generated successfully!")
@@ -366,3 +370,6 @@ if __name__ == "__main__":
 
     for robot_id, battery_level in final_battery_levels.items():
         print(f"{robot_id}: {battery_level}%")
+
+
+
