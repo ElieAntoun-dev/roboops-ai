@@ -25,7 +25,6 @@ print(telemetry_df.head(10))
 print(f"\nTotal records: {len(telemetry_df)}")
 
 
-
 # ============================================================
 # 2. EXTRACT ANOMALOUS RECORDS
 # ============================================================
@@ -45,7 +44,6 @@ print("\n--- ANOMALIES PER ROBOT ---")
 print(anomalies_df["robot_id"].value_counts())
 
 
-
 # ============================================================
 # 3. IDENTIFY ANOMALY GROUPS
 # ============================================================
@@ -57,11 +55,11 @@ anomalies_df["time_gap"] = (
     .dt.total_seconds()
 )
 
-# Start a new group when the robot changes or the gap exceeds 1 second
 # Maximum allowed gap between consecutive anomalies
 max_gap_seconds = 3
 
-# Start a new incident if the gap exceeds 3 seconds
+# Start a new group if the gap exceeds 3 seconds
+# or if this is the first anomaly for a robot
 anomalies_df["new_group"] = (
     anomalies_df["time_gap"].isna()
     | (anomalies_df["time_gap"] > max_gap_seconds)
@@ -73,13 +71,11 @@ anomalies_df["incident_id"] = (
 )
 
 print("\n--- GROUPED ANOMALIES ---")
-
 print(
     anomalies_df[
         ["robot_id", "timestamp", "time_gap", "incident_id"]
     ].head(20)
 )
-
 
 
 # ============================================================
@@ -97,7 +93,7 @@ incident_summary = (
     .reset_index()
 )
 
-# Calculate incident duration, including both start and end seconds
+# Calculate incident duration, including start and end seconds
 incident_summary["duration_seconds"] = (
     incident_summary["end_time"] - incident_summary["start_time"]
 ).dt.total_seconds() + 1
@@ -109,16 +105,37 @@ print(f"\nTotal grouped incidents: {len(incident_summary)}")
 
 
 # ============================================================
-# 5. SAVE GROUPED INCIDENTS
+# 5. FILTER SHORT ANOMALY GROUPS
 # ============================================================
 
+# Minimum number of anomalous measurements required
+min_anomaly_count = 4
+
+# Keep only incidents containing at least 4 anomalies
+filtered_incidents = incident_summary[
+    incident_summary["anomaly_count"] >= min_anomaly_count
+].copy()
+
+print("\n--- FILTERED INCIDENTS ---")
+print(f"Before filtering: {len(incident_summary)}")
+print(f"After filtering: {len(filtered_incidents)}")
+print(f"Removed: {len(incident_summary) - len(filtered_incidents)}")
+
+
+# ============================================================
+# 6. SAVE GROUPED INCIDENTS
+# ============================================================
+
+# Save original grouped incidents (baseline)
 incident_summary.to_csv(
     "data/grouped_incidents_test.csv",
     index=False
 )
 
-print("\nGrouped incidents saved successfully.")
+# Save filtered incidents separately (experiment)
+filtered_incidents.to_csv(
+    "data/grouped_incidents_test_filtered.csv",
+    index=False
+)
 
-
-
-
+print("\nOriginal and filtered incidents saved successfully.")

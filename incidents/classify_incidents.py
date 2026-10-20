@@ -6,8 +6,8 @@ import pandas as pd
 # 1. LOAD INCIDENTS AND TELEMETRY
 # ============================================================
 
-# Load grouped incidents and telemetry predictions
-incident_df = pd.read_csv("data/grouped_incidents_test.csv")
+# Load filtered grouped incidents and telemetry predictions
+incident_df = pd.read_csv("data/grouped_incidents_test_filtered.csv")
 telemetry_df = pd.read_csv("data/telemetry_predictions_test.csv")
 
 # Convert timestamps to datetime objects
@@ -138,13 +138,13 @@ for _, incident in incident_df.iterrows():
 # Convert the list of dictionaries into a DataFrame
 classified_df = pd.DataFrame(classified_incidents)
 
-# Save the classified incidents
+# Save filtered classification results separately
 classified_df.to_csv(
-    "data/classified_incidents_test.csv",
+    "data/classified_incidents_test_filtered.csv",
     index=False
 )
 
-print("\nClassified incidents saved successfully.")
+print("\nFiltered classified incidents saved successfully.")
 
 # Display the number of incidents per category
 print("\nClassification summary:")

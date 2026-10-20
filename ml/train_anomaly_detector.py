@@ -1,44 +1,186 @@
+
 import pandas as pd
-import joblib
-
-from sklearn.ensemble import IsolationForest
-from sklearn.metrics import precision_score, recall_score, f1_score
 
 
 # ============================================================
-# 1. LOAD TRAINING DATA
+# 1. LOAD EVALUATION, INCIDENTS, AND TELEMETRY
 # ============================================================
 
-telemetry_df = pd.read_csv("data/robot_telemetry.csv")
-incident_df = pd.read_csv("data/incident_log.csv")
+# Load the evaluation results
+evaluation_df = pd.read_csv(
+    "data/incident_evaluation_test.csv"
+)
+
+# Load the classified incidents
+incidents_df = pd.read_csv(
+    "data/classified_incidents_test.csv"
+)
+
+# Load telemetry containing anomaly predictions
+telemetry_df = pd.read_csv(
+    "data/telemetry_predictions_test.csv"
+)
+
+# Convert timestamps to datetime
+incidents_df["start_time"] = pd.to_datetime(
+    incidents_df["start_time"]
+)
+
+incidents_df["end_time"] = pd.to_datetime(
+    incidents_df["end_time"]
+)
+
+telemetry_df["timestamp"] = pd.to_datetime(
+    telemetry_df["timestamp"]
+)
+
+print("Evaluation records:", len(evaluation_df))
+print("Classified incidents:", len(incidents_df))
+print("Telemetry records:", len(telemetry_df))
 
 
 # ============================================================
-# 2. FEATURE ENGINEERING
+# 2. RECREATE ENGINEERED FEATURES
 # ============================================================
+
+# Sort telemetry by robot and timestamp
+telemetry_df = telemetry_df.sort_values(
+    by=["robot_id", "timestamp"]
+).reset_index(drop=True)
 
 # Calculate the absolute difference between wheel speeds
 telemetry_df["wheel_speed_difference"] = abs(
-    telemetry_df["left_wheel_speed"] -
-    telemetry_df["right_wheel_speed"]
+    telemetry_df["left_wheel_speed"]
+    - telemetry_df["right_wheel_speed"]
 )
 
-# Calculate battery percentage decrease per second
+# Calculate battery decrease between consecutive measurements
 telemetry_df["battery_drop_rate"] = (
     -telemetry_df.groupby("robot_id")["battery_level"].diff()
 ).fillna(0)
 
-# Calculate average battery drop over the last 5 records
+# Calculate average battery drop over the last 5 measurements
 telemetry_df["battery_drop_rolling"] = (
     telemetry_df.groupby("robot_id")["battery_drop_rate"]
-    .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+    .transform(
+        lambda x: x.rolling(
+            window=5,
+            min_periods=1
+        ).mean()
+    )
 )
 
 
 # ============================================================
-# 3. SELECT MACHINE LEARNING FEATURES
+# 3. IDENTIFY UNMATCHED PREDICTIONS
 # ============================================================
 
+# Select predictions that did not match actual incidents
+false_positives = evaluation_df[
+    evaluation_df["matched"] == False
+].copy()
+
+# Add incident details using the incident ID
+false_positives = false_positives.merge(
+    incidents_df,
+    left_on="predicted_incident_id",
+    right_on="incident_id",
+    how="left"
+)
+
+# Display the unmatched incidents
+print("\n========== UNMATCHED PREDICTIONS ==========")
+
+print(
+    false_positives[
+        [
+            "incident_id",
+            "robot_id_x",
+            "predicted_type",
+            "start_time",
+            "end_time"
+        ]
+    ].to_string(index=False)
+)
+
+print(f"\nTotal unmatched predictions: {len(false_positives)}")
+
+
+# ============================================================
+# 4. ANALYZE ROBOT OPERATING STATES
+# ============================================================
+
+# Loop through every unmatched prediction
+for _, incident in false_positives.iterrows():
+
+    # Retrieve telemetry for the incident's robot and time window
+    incident_telemetry = telemetry_df[
+        (telemetry_df["robot_id"] == incident["robot_id_x"])
+        & (telemetry_df["timestamp"] >= incident["start_time"])
+        & (telemetry_df["timestamp"] <= incident["end_time"])
+    ]
+
+    # Count operating states during the incident
+    status_counts = incident_telemetry["status"].value_counts()
+
+    print(
+        f"\nIncident {incident['incident_id']} "
+        f"- {incident['robot_id_x']}"
+    )
+
+    print(status_counts)
+
+
+# ============================================================
+# 5. ANALYZE ANOMALIES BY OPERATING STATE
+# ============================================================
+
+# Count total measurements for each operating state
+status_counts = telemetry_df.groupby("status").size()
+
+# Count anomalous measurements for each operating state
+anomaly_counts = (
+    telemetry_df[telemetry_df["anomaly"] == -1]
+    .groupby("status")
+    .size()
+)
+
+# Create comparison table
+status_analysis = pd.DataFrame({
+    "total_measurements": status_counts,
+    "anomalies": anomaly_counts
+}).fillna(0)
+
+# Calculate anomaly percentage for each operating state
+status_analysis["anomaly_percentage"] = (
+    status_analysis["anomalies"]
+    / status_analysis["total_measurements"]
+    * 100
+)
+
+print("\n========== ANOMALIES BY OPERATING STATE ==========")
+print(status_analysis.round(3))
+
+
+# ============================================================
+# 6. INVESTIGATE CHARGING ANOMALIES
+# ============================================================
+
+# Select charging telemetry
+charging_df = telemetry_df[
+    telemetry_df["status"] == "Charging"
+]
+
+# Separate normal and anomalous charging measurements
+charging_normal = charging_df[
+    charging_df["anomaly"] == 1
+]
+
+charging_anomalies = charging_df[
+    charging_df["anomaly"] == -1
+]
+
+# Features used by Isolation Forest
 features = [
     "velocity",
     "left_wheel_speed",
@@ -50,137 +192,31 @@ features = [
     "battery_drop_rolling"
 ]
 
-X = telemetry_df[features]
+# Compare average telemetry features
+comparison = pd.DataFrame({
+    "Normal Charging": charging_normal[features].mean(),
+    "Anomalous Charging": charging_anomalies[features].mean()
+})
 
-
+print("\n========== CHARGING TELEMETRY COMPARISON ==========")
+print(comparison.round(4))
 # ============================================================
-# 4. TRAIN AND SAVE ISOLATION FOREST
-# ============================================================
-
-model = IsolationForest(
-    n_estimators=100,
-    contamination=0.05,
-    random_state=42
-)
-
-model.fit(X)
-
-joblib.dump(model, "ml/isolation_forest.pkl")
-
-print("Isolation Forest trained and saved successfully.")
-
-
-# ============================================================
-# 5. PREDICT ANOMALIES
+# 7. INSPECT INDIVIDUAL CHARGING ANOMALIES
 # ============================================================
 
-# Isolation Forest returns 1 for normal and -1 for anomaly
-telemetry_df["anomaly"] = model.predict(X)
-
-# Convert predictions to 0 = normal, 1 = anomaly
-telemetry_df["predicted_incident"] = (
-    telemetry_df["anomaly"] == -1
-).astype(int)
-
-# Calculate anomaly scores
-telemetry_df["anomaly_score"] = model.decision_function(X)
-
-
-# ============================================================
-# 6. LABEL ACTUAL INCIDENTS
-# ============================================================
-
-# Initially assume all records are normal
-telemetry_df["actual_incident"] = 0
-telemetry_df["incident_type"] = "normal"
-
-# Label incidents using the ground-truth incident log
-for _, incident in incident_df.iterrows():
-
-    robot_id = incident["robot_id"]
-    start = int(incident["start_second"])
-    end = start + int(incident["duration"])
-
-    # Find the telemetry records belonging to this robot
-    robot_indices = telemetry_df.index[
-        telemetry_df["robot_id"] == robot_id
-    ]
-
-    # Select the records corresponding to the incident
-    incident_indices = robot_indices[start:end]
-
-    # Assign the actual incident label and type
-    telemetry_df.loc[incident_indices, "actual_incident"] = 1
-
-    telemetry_df.loc[
-        incident_indices, "incident_type"
-    ] = incident["incident_type"]
-
-
-# ============================================================
-# 7. EVALUATE MODEL PERFORMANCE
-# ============================================================
-
-y_true = telemetry_df["actual_incident"]
-y_pred = telemetry_df["predicted_incident"]
-
-# Display confusion matrix
-print("\n--- CONFUSION MATRIX ---")
-
-print(
-    pd.crosstab(
-        y_true,
-        y_pred,
-        rownames=["Actual"],
-        colnames=["Predicted"]
-    )
-)
-
-# Calculate performance metrics
-precision = precision_score(y_true, y_pred)
-recall = recall_score(y_true, y_pred)
-f1 = f1_score(y_true, y_pred)
-
-print("\n--- MODEL PERFORMANCE ---")
-
-print(f"Precision: {precision:.2%}")
-print(f"Recall: {recall:.2%}")
-print(f"F1 Score: {f1:.2%}")
-
-
-# ============================================================
-# 8. DETECTION RATE BY INCIDENT TYPE
-# ============================================================
-
-print("\n--- DETECTION RATE BY INCIDENT TYPE ---")
-
-incident_types = [
-    "unexpected_stop",
-    "wheel_slip",
-    "battery_discharge"
+columns = [
+    "timestamp",
+    "robot_id",
+    "status",
+    "battery_level",
+    "battery_drop_rate",
+    "battery_drop_rolling",
+    "anomaly"
 ]
 
-for incident_type in incident_types:
+print("\n========== CHARGING ANOMALY DETAILS ==========")
 
-    # Select actual records belonging to this incident type
-    incident_records = telemetry_df[
-        telemetry_df["incident_type"] == incident_type
-    ]
-
-    total_records = len(incident_records)
-
-    # Count correctly detected anomaly records
-    detected_records = (
-        incident_records["predicted_incident"] == 1
-    ).sum()
-
-    detection_rate = (
-        detected_records / total_records
-        if total_records > 0 else 0
-    )
-
-    print(
-        f"{incident_type}: "
-        f"{detected_records}/{total_records} detected "
-        f"({detection_rate:.2%})"
-    )
+print(
+    charging_anomalies[columns]
+    .to_string(index=False)
+)
