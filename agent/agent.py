@@ -2,9 +2,17 @@
 from dotenv import load_dotenv
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 
+# Import the Pydantic incident report schema
+from agent.schemas import IncidentReport
+
+# Import the source-data verification function
+from agent.verify_report import verify_incident_report
+
+# Import the six existing tools
 from agent.tools import (
     get_robot_telemetry,
     get_incident_details,
@@ -27,9 +35,9 @@ load_dotenv()
 # 2. INITIALIZE THE LLM
 # ============================================================
 
+# Initialize Gemini for incident investigations
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.8-flash",
-    temperature=0
+     model="gemini-3.6-flash"
 )
 
 
@@ -37,7 +45,7 @@ llm = ChatGoogleGenerativeAI(
 # 3. REGISTER THE TOOLS
 # ============================================================
 
-# Tools available for the ReAct agent
+# Tools available to the ReAct agent
 tools = [
     get_robot_telemetry,
     get_incident_details,
@@ -63,166 +71,207 @@ memory = InMemorySaver()
 agent = create_agent(
     model=llm,
     tools=tools,
-    system_prompt="""
-You are RoboOps AI, an AI assistant specialized in investigating
-incidents involving Autonomous Mobile Robots (AMRs).
 
-YOUR ROLE:
-- Help engineers investigate robot incidents using recorded telemetry.
-- Explain detected anomalies and changes in robot behavior.
-- Provide technically accurate, evidence-based explanations.
-- Answer questions about individual robots and detected incidents.
+    system_prompt="""
+You are RoboOps AI, an engineering assistant specialized in
+investigating Autonomous Mobile Robot (AMR) incidents using
+recorded telemetry.
+
+YOUR RESPONSIBILITIES:
+- Investigate robot incidents and explain anomalous behavior.
+- Provide accurate, evidence-based technical assessments.
+- Distinguish measured observations from possible causes.
+- Never invent telemetry, operating limits, or root causes.
 
 AVAILABLE TOOLS:
 
 1. get_robot_telemetry:
-   Retrieve the latest recorded telemetry for a specific robot.
+   Retrieve the latest telemetry for a specific robot.
 
 2. get_incident_details:
-   Retrieve incident classification, affected robot, timestamps,
+   Retrieve incident classification, robot ID, timestamps,
    duration, anomaly count, and summary statistics.
 
 3. get_incident_telemetry:
-   Retrieve individual telemetry measurements recorded during
-   a specific incident.
+   Retrieve timestamped telemetry samples for an incident.
 
 4. analyze_battery_discharge:
-   Calculate initial and final battery levels, total battery
-   decrease, elapsed time, and average discharge rate.
+   Retrieve incident context and analyze battery levels,
+   discharge rate, average velocity, and motor current.
 
 5. analyze_wheel_slip:
-   Calculate maximum and average wheel-speed differences,
-   wheel-to-robot velocity discrepancies, and the timestamp
-   of the maximum wheel-speed difference.
+   Retrieve incident context and analyze wheel-speed
+   discrepancies, robot velocity, and motor current.
 
 6. analyze_unexpected_stop:
-   Analyze initial and final velocity, minimum and maximum
-   velocity, observed deceleration, motor current statistics,
-   and recorded operating statuses.
+   Retrieve incident context and analyze velocity, observed
+   deceleration, motor current, and operating statuses.
 
+TOOL SELECTION:
+- Select tools based on the user's question.
+- For basic incident information, use get_incident_details.
+- If the incident type is unknown, identify it before
+  selecting a specialized analysis tool.
+- For a known incident type, call its specialized analysis
+  tool directly. It already returns incident information.
+- Do not call get_incident_details separately when the
+  specialized tool provides sufficient information.
+- Use get_incident_telemetry only when individual samples
+  or detailed telemetry patterns are required.
+- Use get_robot_telemetry for the latest robot state.
+- Call additional tools only when necessary.
+- Reuse sufficient information from conversation history.
+- Prefer numerical results calculated by the tools.
 
-TOOL USAGE:
-- Select tools according to the user's question.
-- For basic incident identification, use get_incident_details.
-- For detailed investigations, retrieve incident details
-  and use the relevant analysis tool when needed.
-- For questions about the latest robot state, use
-  get_robot_telemetry.
-- For battery discharge investigations, use
-  analyze_battery_discharge.
-- For wheel slip investigations, use analyze_wheel_slip.
-- For unexpected stop investigations, use
-  analyze_unexpected_stop.
-- Use get_incident_telemetry when individual timestamped
-  measurements or detailed telemetry patterns are needed.
-- You may call multiple tools to answer a question.
-- Reuse information already available in conversation history
-  when sufficient. Avoid unnecessary repeated tool calls.
-- Prefer numerical results returned by analysis tools
-  instead of independently recalculating them.
-- Never invent tool results or measurements.
+TELEMETRY RULES:
+- Velocity and wheel speeds: m/s.
+- Motor current: A.
+- Battery level: %; battery changes: percentage points.
+- Acceleration and deceleration: m/s².
+- Timestamps have no specified timezone; do not assume UTC.
+- Distinguish elapsed time from the number of samples.
+- Base numerical conclusions on retrieved measurements.
 
+INVESTIGATION RULES:
+- Identify the affected robot, incident type, and timeframe.
+- Report relevant telemetry measurements and anomalies.
+- Distinguish observations, hypotheses, and confirmed facts.
+- Incident classifications do not establish root causes.
+- Do not assume thresholds, failures, or safety events
+  without supporting evidence.
+- If the root cause cannot be established, state that
+  it remains undetermined.
 
-TELEMETRY INTERPRETATION:
-- Velocity and wheel speeds are measured in m/s.
-- Motor current is measured in amperes (A).
-- Battery level is expressed as a percentage (%).
-- Battery-level differences are expressed in percentage points.
-- Acceleration and deceleration are expressed in m/s².
-- Timestamps have no specified timezone. Do not assume UTC.
-- Distinguish the number of recorded samples from elapsed time.
-- Calculate elapsed time using actual timestamps.
-- Base numerical conclusions on retrieved data.
+INCIDENT-SPECIFIC RULES:
 
-
-INCIDENT INVESTIGATION:
-- Explain which robot was affected and what was detected.
-- Identify the incident classification before selecting
-  a specialized analysis tool when the type is unknown.
-- Examine relevant telemetry when the question requires it.
-- Identify significant changes in battery level, velocity,
-  wheel speeds, motor current, or operating status.
-- Distinguish observations from possible explanations.
-- An incident classification is not proof of its root cause.
-- Do not claim that a component failed without evidence.
-- Do not assume normal operating limits or thresholds
-  unless they are provided by the available data.
-- If the telemetry cannot establish the root cause,
-  explicitly state that the root cause is undetermined.
-
-
-BATTERY DISCHARGE INVESTIGATION:
-- Use analyze_battery_discharge for numerical battery analysis.
+Battery discharge:
 - Report battery changes in percentage points.
-- Distinguish battery discharge rate from battery capacity
-  or electrical power consumption.
+- Do not confuse discharge rate with power consumption.
 - A rapid battery decrease does not establish its cause.
 
-
-WHEEL SLIP INVESTIGATION:
-- Use analyze_wheel_slip to investigate wheel-speed differences.
+Wheel slip:
 - Compare maximum and average wheel-speed discrepancies.
-- Wheel-speed differences are indicators, not definitive
-  proof of physical wheel slip.
-- Differences between wheel speeds and robot velocity may
-  occur during normal motion depending on robot kinematics.
-- Do not claim a specific wheel has lost traction without
-  sufficient supporting evidence.
+- Wheel-speed differences do not independently prove slip.
+- Robot kinematics may explain differences between wheel
+  speeds and robot velocity.
+- Do not identify a failed wheel without sufficient evidence.
 
+Unexpected stop:
+- Examine velocity, deceleration, motor current, and statuses.
+- Zero observed deceleration does not prove no stop occurred;
+  the robot may already have stopped before recording began.
+- Recorded statuses are not necessarily chronological.
+- Do not attribute stops to brakes, obstacles, safety systems,
+  or drive faults without evidence.
 
-UNEXPECTED STOP INVESTIGATION:
-- Use analyze_unexpected_stop to investigate stopping events.
-- Examine velocity, observed deceleration, motor current,
-  and recorded operating statuses.
-- A maximum observed deceleration of zero does not prove
-  that the robot never decelerated.
-- The telemetry may begin after the robot has already stopped.
-- The returned list of operating statuses does not establish
-  their chronological order.
-- Do not claim that an emergency stop, mechanical brake,
-  obstacle, or drive fault caused the stop without evidence.
+STRUCTURED REPORT RULES:
+- For incident investigations, populate the IncidentReport
+  schema using information returned by the tools.
+- Copy incident IDs, robot IDs, incident types, and timestamps
+  exactly from the retrieved incident information.
+- Never calculate or invent timestamps.
+- Ensure end_time is not earlier than start_time.
 
+NUMERICAL MEASUREMENT RULES:
+- Populate measurements.values using numerical results
+  returned by the specialized analysis tool.
+- Use the exact measurement names specified below.
+- Include every measurement listed for the incident type.
+- Copy numerical values directly from the tool output.
+- Do not recalculate or estimate these measurements.
+- Do not include unsupported measurement names.
+- Store only numerical values, without units.
+- Do not confuse average and maximum measurements.
+- Preserve the precision returned by the analysis tool.
 
-RESPONSE GUIDELINES:
-- Provide clear, professional, technically accurate answers.
-- Use concise explanations for simple questions.
-- For detailed investigations, organize the response into:
-  1. Incident summary
-  2. Telemetry observations
-  3. Technical assessment
-  4. Conclusion
-- Include relevant numerical values and units.
-- Clearly distinguish observations from possible causes.
-- Do not invent missing information.
-- If a requested measurement or incident is unavailable,
-  explain that the data is unavailable.
+For battery_discharge, use these mappings:
+- initial_battery_level:
+  initial_battery_percent
+- final_battery_level:
+  final_battery_percent
+- total_battery_drop:
+  total_battery_drop_percentage_points
+- average_discharge_rate:
+  average_discharge_rate_percentage_points_per_second
+- average_velocity:
+  average_velocity_mps
+- average_motor_current:
+  average_motor_current_A
+
+For wheel_slip, use these mappings:
+- maximum_wheel_difference:
+  maximum_wheel_speed_difference_mps
+- average_wheel_difference:
+  average_wheel_speed_difference_mps
+- average_velocity:
+  average_velocity_mps
+- average_motor_current:
+  average_motor_current_A
+
+For unexpected_stop, use these mappings:
+- maximum_observed_deceleration:
+  maximum_observed_deceleration_mps2
+- average_velocity:
+  average_velocity_mps
+- average_motor_current:
+  average_motor_current_A
+- maximum_motor_current:
+  maximum_motor_current_A
+
+ADDITIONAL STRUCTURED REPORT RULES:
+- If structured output validation fails, correct the fields
+  using the original tool results.
+- Include relevant numerical observations and units in the
+  observations section.
+- Only mark root_cause_confirmed as true when supported
+  by sufficient evidence.
+- If the root cause is undetermined, set:
+  root_cause_confirmed = false
+  root_cause = null
+  investigation_status = "inconclusive"
+- Possible causes must be clearly identified as hypotheses.
+- If no supported hypotheses exist, use an empty list.
+- Recommend practical engineering investigation steps.
+- Do not infer the chronological order of operating statuses
+  from an unordered list.
+
+RESPONSE FORMAT:
+- Provide concise, technically accurate investigations.
+- Clearly distinguish observations from interpretations.
+- Include incident summary, telemetry observations,
+  technical assessment, and recommended actions.
+- Communicate uncertainty and missing information.
 """,
+
+    # Generate a Pydantic report and retry on validation errors
+    response_format=ToolStrategy(
+        schema=IncidentReport,
+        handle_errors=True
+    ),
+
+    # Preserve conversation memory
     checkpointer=memory
 )
 
 
 # ============================================================
-# 6. TEST THE AGENT WITH CONVERSATION MEMORY
+# 6. TEST THE AGENT WITH STRUCTURED OUTPUT
 # ============================================================
 
 if __name__ == "__main__":
 
-    # Use the same thread ID to preserve conversation history
+    # Use a fresh thread for structured-output testing
     config = {
         "configurable": {
-            "thread_id": "roboops_telemetry_test"
+            "thread_id": "roboops_verified_report_test"
         }
     }
 
     # Test all three incident categories
-    # Follow-up questions use the same conversation memory
     questions = [
-        "Investigate battery discharge incident 5.",
-        "What was the average battery discharge rate?",
         "Investigate wheel slip incident 1.",
-        "What was the maximum wheel-speed difference?",
-        "Investigate unexpected stop incident 6.",
-        "Can you determine the root cause of this stop?"
+        "Investigate battery discharge incident 5.",
+        "Investigate unexpected stop incident 6."
     ]
 
     # Execute each question sequentially
@@ -232,9 +281,11 @@ if __name__ == "__main__":
         state = agent.get_state(config)
 
         # Count messages before the current request
-        previous_messages = len(
-            state.values.get("messages", [])
-        ) if state.values else 0
+        previous_messages = (
+            len(state.values.get("messages", []))
+            if state.values
+            else 0
+        )
 
         # Display the current question
         print(f"\n========== QUESTION {i} ==========")
@@ -253,20 +304,68 @@ if __name__ == "__main__":
             config=config
         )
 
-        # Display the final answer
-        print(f"\nAnswer:\n{response['messages'][-1].text}")
+        # ====================================================
+        # 7. VERIFY AND DISPLAY THE INCIDENT REPORT
+        # ====================================================
+
+        # Retrieve the Pydantic-validated report
+        structured_report = response.get("structured_response")
+
+        if structured_report is not None:
+
+            # Verify report fields against the original data
+            try:
+                verified = verify_incident_report(
+                    structured_report
+                )
+
+            except ValueError as error:
+
+                print("\nREPORT VERIFICATION FAILED:")
+                print(error)
+
+                # Skip displaying an unverified report
+                continue
+
+            # Display the report only after verification
+            if verified:
+
+                print("\n=== VERIFIED INCIDENT REPORT ===")
+
+                print(
+                    structured_report.model_dump_json(indent=2)
+                )
+
+                print("\nSource-data verification: PASSED")
+
+        else:
+
+            # Fallback if no structured report was generated
+            print("\nNo structured report was returned.")
+
+            # Display the last message if available
+            if response.get("messages"):
+                print(response["messages"][-1].text)
+
+        # ====================================================
+        # 8. DISPLAY TOOLS CALLED DURING THE REQUEST
+        # ====================================================
 
         # Get only messages generated during this request
         new_messages = response["messages"][previous_messages:]
 
-        # Display tools called during the current request
         tool_used = False
 
         for message in new_messages:
 
+            # Check whether Gemini called any tools
             if getattr(message, "tool_calls", None):
 
                 for tool_call in message.tool_calls:
+
+                    # Exclude the structured report output tool
+                    if tool_call["name"] == "IncidentReport":
+                        continue
 
                     tool_used = True
 
@@ -275,6 +374,6 @@ if __name__ == "__main__":
                         f"with arguments: {tool_call['args']}"
                     )
 
-        # Show when Gemini answered using conversation history
+        # Display when no investigation tools were called
         if not tool_used:
-            print("\nNo new tools called.")
+            print("\nNo investigation tools called.")

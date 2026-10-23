@@ -221,62 +221,81 @@ Args:
 # TOOL 4 - ANALYZE BATTERY DISCHARGE
 # ============================================================
 
+
 @tool
 def analyze_battery_discharge(incident_id: int) -> dict:
-    """Calculate battery discharge statistics for a detected incident.
+    """Investigate a battery discharge incident using recorded telemetry.
 
-    Use this tool when the user asks how much or how quickly
-    the battery level changed during an incident.
+    Use this tool when the user asks to investigate a known
+    battery discharge incident or analyze battery-level changes.
 
-    Returns the initial and final battery levels, total change,
-    elapsed time, average discharge rate, and measurement count.
+    Returns incident information, battery statistics, average
+    robot velocity, average motor current, and measurement count.
 
-    This tool performs numerical calculations only. It does not
-    establish whether the discharge is abnormal or determine
+    This tool provides numerical evidence but cannot establish
     the underlying root cause.
 
     Args:
         incident_id: Numeric identifier of the detected incident.
     """
 
-    # 1. Retrieve the incident's telemetry using our existing tool
+    # 1. Retrieve incident information and telemetry
     result = get_incident_telemetry.invoke({
         "incident_id": incident_id
     })
 
-    # 2. Check for errors
+    # 2. Check for retrieval errors
     if "error" in result:
         return result
 
-    # 3. Convert the telemetry records into a DataFrame
+    # 3. Convert telemetry records into a DataFrame
     df = pd.DataFrame(result["telemetry"])
 
-    # 4. Check that sufficient battery data is available
-    if "battery_level" not in df.columns:
-        return {"error": "Battery level data is unavailable."}
+    # 4. Validate required columns
+    required_columns = [
+        "timestamp",
+        "battery_level"
+    ]
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    for column in required_columns:
+        if column not in df.columns:
+            return {
+                "error": f"Required column '{column}' is unavailable."
+            }
+
+    # 5. Convert timestamps and battery levels
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        errors="coerce"
+    )
+
     df["battery_level"] = pd.to_numeric(
         df["battery_level"],
         errors="coerce"
     )
 
-    df = df.dropna(
+    # 6. Remove invalid measurements and sort by time
+    battery_df = df.dropna(
         subset=["timestamp", "battery_level"]
     ).sort_values("timestamp")
 
-    if len(df) < 2:
+    if len(battery_df) < 2:
         return {
             "error": "At least two valid battery measurements are required."
         }
 
-    # 5. Get the first and last battery measurements
-    initial_battery = float(df["battery_level"].iloc[0])
-    final_battery = float(df["battery_level"].iloc[-1])
+    # 7. Extract initial and final battery measurements
+    initial_battery = float(
+        battery_df["battery_level"].iloc[0]
+    )
 
-    # 6. Calculate elapsed time between the measurements
-    start_time = df["timestamp"].iloc[0]
-    end_time = df["timestamp"].iloc[-1]
+    final_battery = float(
+        battery_df["battery_level"].iloc[-1]
+    )
+
+    # 8. Calculate elapsed time
+    start_time = battery_df["timestamp"].iloc[0]
+    end_time = battery_df["timestamp"].iloc[-1]
 
     elapsed_seconds = (
         end_time - start_time
@@ -287,22 +306,54 @@ def analyze_battery_discharge(incident_id: int) -> dict:
             "error": "Elapsed time must be greater than zero."
         }
 
-    # 7. Calculate battery decrease
+    # 9. Calculate battery statistics
+    battery_change = final_battery - initial_battery
     total_battery_drop = initial_battery - final_battery
 
-    # 8. Calculate average discharge rate
     average_discharge_rate = (
         total_battery_drop / elapsed_seconds
     )
 
-    # 9. Return the calculated results
+    # 10. Calculate average robot velocity, if available
+    average_velocity = None
+
+    if "velocity" in df.columns:
+        velocity = pd.to_numeric(
+            df["velocity"],
+            errors="coerce"
+        )
+
+        if velocity.notna().any():
+            average_velocity = round(
+                float(velocity.mean()), 4
+            )
+
+    # 11. Calculate average motor current, if available
+    average_motor_current = None
+
+    if "motor_current" in df.columns:
+        motor_current = pd.to_numeric(
+            df["motor_current"],
+            errors="coerce"
+        )
+
+        if motor_current.notna().any():
+            average_motor_current = round(
+                float(motor_current.mean()), 4
+            )
+
+    # 12. Return incident information and analysis results
     return {
         "incident_id": int(incident_id),
         "robot_id": result["robot_id"],
+        "incident_type": result["incident_type"],
+        "start_time": result["start_time"],
+        "end_time": result["end_time"],
+
         "initial_battery_percent": round(initial_battery, 3),
         "final_battery_percent": round(final_battery, 3),
         "battery_change_percentage_points": round(
-            final_battery - initial_battery, 3
+            battery_change, 3
         ),
         "total_battery_drop_percentage_points": round(
             total_battery_drop, 3
@@ -311,31 +362,44 @@ def analyze_battery_discharge(incident_id: int) -> dict:
         "average_discharge_rate_percentage_points_per_second": round(
             average_discharge_rate, 4
         ),
-        "measurement_count": len(df)
+
+        "average_velocity_mps": average_velocity,
+        "average_motor_current_A": average_motor_current,
+        "measurement_count": len(battery_df),
+
+        "assessment": (
+            "Battery discharge statistics were calculated "
+            "from recorded telemetry. The underlying root "
+            "cause cannot be established from these "
+            "measurements alone."
+        )
     }
+
 
 # ============================================================
 # TOOL 5 - ANALYZE WHEEL SLIP
 # ============================================================
 
+
 @tool
 def analyze_wheel_slip(incident_id: int) -> dict:
-    """Analyze wheel-speed differences during a detected incident.
+    """Investigate a wheel slip incident using recorded telemetry.
 
-    Use this tool to investigate possible wheel slip or wheel-speed
-    inconsistencies using recorded left wheel speed, right wheel
-    speed, and robot velocity.
+    Use this tool when the user asks to investigate a known
+    wheel slip incident or analyze wheel-speed discrepancies.
 
-    Returns maximum and average wheel-speed differences and
-    wheel-to-robot velocity discrepancies.
+    Returns incident information, wheel-speed statistics,
+    average robot velocity, average motor current, and
+    measurement count.
 
-    These indicators do not independently confirm physical slip.
+    Wheel-speed differences do not independently confirm
+    physical slip or establish the underlying root cause.
 
     Args:
         incident_id: Numeric identifier of the detected incident.
     """
 
-    # 1. Retrieve incident telemetry
+    # 1. Retrieve incident information and telemetry
     result = get_incident_telemetry.invoke({
         "incident_id": incident_id
     })
@@ -376,19 +440,22 @@ def analyze_wheel_slip(incident_id: int) -> dict:
         errors="coerce"
     )
 
+    # 5. Remove invalid measurements and sort by time
     df = df.dropna(
         subset=required_columns
     ).sort_values("timestamp")
 
     if df.empty:
-        return {"error": "No valid wheel telemetry available."}
+        return {
+            "error": "No valid wheel telemetry available."
+        }
 
-    # 5. Calculate absolute wheel-speed difference
+    # 6. Calculate absolute wheel-speed difference
     df["wheel_speed_difference"] = (
         df["left_wheel_speed"] - df["right_wheel_speed"]
     ).abs()
 
-    # 6. Compare wheel speeds with reported robot velocity
+    # 7. Compare wheel speeds with reported robot velocity
     df["left_velocity_difference"] = (
         df["left_wheel_speed"] - df["velocity"]
     ).abs()
@@ -397,13 +464,37 @@ def analyze_wheel_slip(incident_id: int) -> dict:
         df["right_wheel_speed"] - df["velocity"]
     ).abs()
 
-    # 7. Identify the measurement with maximum wheel difference
+    # 8. Identify the maximum wheel-speed difference
     max_index = df["wheel_speed_difference"].idxmax()
 
-    # 8. Return numerical indicators
+    # 9. Calculate average robot velocity
+    average_velocity = round(
+        float(df["velocity"].mean()), 4
+    )
+
+    # 10. Calculate average motor current, if available
+    average_motor_current = None
+
+    if "motor_current" in df.columns:
+
+        motor_current = pd.to_numeric(
+            df["motor_current"],
+            errors="coerce"
+        )
+
+        if motor_current.notna().any():
+            average_motor_current = round(
+                float(motor_current.mean()), 4
+            )
+
+    # 11. Return incident information and analysis results
     return {
         "incident_id": int(incident_id),
         "robot_id": result["robot_id"],
+        "incident_type": result["incident_type"],
+        "start_time": result["start_time"],
+        "end_time": result["end_time"],
+
         "maximum_wheel_speed_difference_mps": round(
             float(df["wheel_speed_difference"].max()), 4
         ),
@@ -419,7 +510,11 @@ def analyze_wheel_slip(incident_id: int) -> dict:
         "timestamp_of_maximum_difference": (
             df.loc[max_index, "timestamp"].isoformat()
         ),
+
+        "average_velocity_mps": average_velocity,
+        "average_motor_current_A": average_motor_current,
         "measurement_count": len(df),
+
         "assessment": (
             "Wheel-speed discrepancies were calculated. "
             "Physical wheel slip cannot be confirmed from "
@@ -427,28 +522,32 @@ def analyze_wheel_slip(incident_id: int) -> dict:
         )
     }
 
+
 # ============================================================
 # TOOL 6 - ANALYZE UNEXPECTED STOP
 # ============================================================
 
+
 @tool
 def analyze_unexpected_stop(incident_id: int) -> dict:
-    """Analyze velocity changes and operating status during an incident.
+    """Investigate an unexpected stop using recorded robot telemetry.
 
-    Use this tool to investigate unexpected stops, rapid
-    deceleration, or interruptions in robot motion.
+    Use this tool when the user asks to investigate a known
+    unexpected stop incident, rapid deceleration, or interruption
+    in robot motion.
 
-    Returns velocity statistics, maximum observed deceleration,
-    motor-current statistics, and recorded operating statuses.
+    Returns incident information, velocity statistics, observed
+    deceleration, motor current statistics, operating statuses,
+    and measurement count.
 
-    This tool does not establish the cause of a stop or
-    determine whether a safety system was triggered.
+    This tool does not establish the root cause of a stop or
+    confirm whether a safety system was triggered.
 
     Args:
         incident_id: Numeric identifier of the detected incident.
     """
 
-    # 1. Retrieve incident telemetry
+    # 1. Retrieve incident information and telemetry
     result = get_incident_telemetry.invoke({
         "incident_id": incident_id
     })
@@ -489,6 +588,7 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
             errors="coerce"
         )
 
+    # 5. Remove invalid records and sort chronologically
     df = df.dropna(
         subset=required_columns
     ).sort_values("timestamp")
@@ -498,20 +598,20 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
             "error": "At least two valid telemetry records are required."
         }
 
-    # 5. Calculate time difference between measurements
+    # 6. Calculate time difference between measurements
     df["time_difference"] = (
         df["timestamp"].diff().dt.total_seconds()
     )
 
-    # 6. Calculate change in velocity
+    # 7. Calculate velocity changes
     df["velocity_change"] = df["velocity"].diff()
 
-    # 7. Calculate acceleration / deceleration
+    # 8. Calculate acceleration and deceleration
     df["acceleration"] = (
         df["velocity_change"] / df["time_difference"]
     )
 
-    # 8. Ignore invalid or zero time intervals
+    # 9. Ignore invalid or zero time intervals
     valid_acceleration = df.loc[
         df["time_difference"] > 0,
         "acceleration"
@@ -522,7 +622,7 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
             "error": "No valid time intervals for deceleration analysis."
         }
 
-    # 9. Identify maximum observed deceleration
+    # 10. Identify maximum observed deceleration
     minimum_acceleration = float(valid_acceleration.min())
 
     maximum_deceleration = max(
@@ -530,10 +630,27 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
         -minimum_acceleration
     )
 
-    # 10. Return analysis results
+    # 11. Calculate average robot velocity
+    average_velocity = float(df["velocity"].mean())
+
+    # 12. Calculate elapsed time
+    start_time = df["timestamp"].iloc[0]
+    end_time = df["timestamp"].iloc[-1]
+
+    elapsed_seconds = (
+        end_time - start_time
+    ).total_seconds()
+
+    # 13. Return incident information and analysis results
     return {
         "incident_id": int(incident_id),
         "robot_id": result["robot_id"],
+        "incident_type": result["incident_type"],
+        "start_time": result["start_time"],
+        "end_time": result["end_time"],
+
+        "elapsed_seconds": elapsed_seconds,
+
         "initial_velocity_mps": round(
             float(df["velocity"].iloc[0]), 4
         ),
@@ -546,22 +663,35 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
         "maximum_velocity_mps": round(
             float(df["velocity"].max()), 4
         ),
+        "average_velocity_mps": round(
+            average_velocity, 4
+        ),
+
         "maximum_observed_deceleration_mps2": round(
             maximum_deceleration, 4
         ),
+
         "average_motor_current_A": round(
             float(df["motor_current"].mean()), 4
         ),
         "maximum_motor_current_A": round(
             float(df["motor_current"].max()), 4
         ),
+
         "recorded_statuses": sorted(
             df["status"].astype(str).unique().tolist()
         ),
+
         "measurement_count": len(df),
+
         "assessment": (
-            "Motion and current measurements were analyzed. "
-            "The cause of any stopping event is not established."
+            "Velocity, deceleration, motor current, and "
+            "operating statuses were analyzed. "
+            "A zero observed deceleration does not prove "
+            "that no stopping event occurred, because the "
+            "robot may have stopped before the incident "
+            "telemetry window began. "
+            "The root cause remains undetermined."
         )
     }
 
@@ -577,24 +707,10 @@ def analyze_unexpected_stop(incident_id: int) -> dict:
 
 if __name__ == "__main__":
 
-    # Test wheel slip using an actual wheel-slip incident
-    print("\n========== WHEEL SLIP - INCIDENT 1 ==========")
-
-    wheel_result = analyze_wheel_slip.invoke({
-        "incident_id": 1
+    result = analyze_battery_discharge.invoke({
+        "incident_id": 5
     })
 
-    for key, value in wheel_result.items():
+    for key, value in result.items():
         print(f"{key}: {value}")
-
-    # Test unexpected stop using an actual stopping incident
-    print("\n========== UNEXPECTED STOP - INCIDENT 6 ==========")
-
-    stop_result = analyze_unexpected_stop.invoke({
-        "incident_id": 6
-    })
-
-    for key, value in stop_result.items():
-        print(f"{key}: {value}")
-
 
