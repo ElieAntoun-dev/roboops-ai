@@ -30,6 +30,10 @@ INCIDENT CONTEXT:
 - Use this report as the initial investigation context.
 - Stay focused on the active incident.
 - Do not mix information from different incidents.
+- If the engineer asks about another incident, explain that
+  they must select that incident in the Streamlit interface
+  and generate its investigation report first.
+- Do not switch incidents within the current conversation.
 
 AVAILABLE TOOLS:
 1. get_robot_telemetry

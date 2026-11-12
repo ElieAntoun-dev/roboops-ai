@@ -9,7 +9,27 @@ import plotly.graph_objects as go
 
 from pathlib import Path
 from uuid import uuid4
+from io import BytesIO
+from xml.sax.saxutils import escape
 import sys
+
+# PDF generation
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    ListFlowable,
+    ListItem
+)
+from reportlab.lib import colors
+from reportlab.lib.styles import (
+    getSampleStyleSheet,
+    ParagraphStyle
+)
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -266,7 +286,383 @@ def display_incident_report(report):
 
 
 # ============================================================
-# 6. CREATE INTERACTIVE TELEMETRY CHART
+# 6. GENERATE PDF INVESTIGATION REPORT
+# ============================================================
+
+def generate_incident_pdf(report):
+    """
+    Convert a verified Pydantic IncidentReport into a PDF.
+
+    Input:
+        report: Verified IncidentReport object
+
+    Output:
+        PDF file content as bytes
+    """
+
+    report_data = report.model_dump(mode="json")
+
+    # Create PDF in memory
+    buffer = BytesIO()
+
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=45,
+        leftMargin=45,
+        topMargin=50,
+        bottomMargin=50,
+        title="RoboOps AI Incident Investigation Report"
+    )
+
+    # --------------------------------------------------------
+    # 6.1 DEFINE PDF STYLES
+    # --------------------------------------------------------
+
+    styles = getSampleStyleSheet()
+
+    styles.add(ParagraphStyle(
+        name="RoboTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=24,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#183153"),
+        spaceAfter=16
+    ))
+
+    styles.add(ParagraphStyle(
+        name="RoboSection",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=16,
+        textColor=colors.HexColor("#183153"),
+        spaceBefore=16,
+        spaceAfter=8,
+        keepWithNext=True
+    ))
+
+    styles.add(ParagraphStyle(
+        name="RoboBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=14,
+        spaceAfter=7
+    ))
+
+    styles.add(ParagraphStyle(
+        name="RoboSmall",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=12,
+        textColor=colors.grey,
+        spaceAfter=8
+    ))
+
+    story = []
+
+    # --------------------------------------------------------
+    # 6.2 HELPER FUNCTIONS
+    # --------------------------------------------------------
+
+    def add_text(value):
+
+        story.append(
+            Paragraph(
+                escape(str(value)),
+                styles["RoboBody"]
+            )
+        )
+
+    def add_section(title):
+
+        story.append(
+            Paragraph(
+                escape(title),
+                styles["RoboSection"]
+            )
+        )
+
+    def add_bullets(items):
+
+        if not items:
+            add_text("No information provided.")
+            return
+
+        bullet_items = []
+
+        for item in items:
+
+            bullet_items.append(
+                ListItem(
+                    Paragraph(
+                        escape(str(item)),
+                        styles["RoboBody"]
+                    ),
+                    leftIndent=12
+                )
+            )
+
+        story.append(
+            ListFlowable(
+                bullet_items,
+                bulletType="bullet",
+                start="circle",
+                leftIndent=18
+            )
+        )
+
+    # --------------------------------------------------------
+    # 6.3 REPORT TITLE
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "RoboOps AI<br/>Incident Investigation Report",
+            styles["RoboTitle"]
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "Source-data verification: PASSED",
+            styles["RoboSmall"]
+        )
+    )
+
+    story.append(Spacer(1, 10))
+
+    # --------------------------------------------------------
+    # 6.4 INCIDENT INFORMATION
+    # --------------------------------------------------------
+
+    add_section("1. Incident Information")
+
+    information = [
+        ("Incident ID", report_data["incident_id"]),
+        ("Robot ID", report_data["robot_id"]),
+        (
+            "Incident Type",
+            report_data["incident_type"].replace("_", " ").title()
+        ),
+        ("Start Time", report_data["start_time"]),
+        ("End Time", report_data["end_time"])
+    ]
+
+    information_rows = []
+
+    for label, value in information:
+
+        information_rows.append([
+            Paragraph(
+                f"<b>{escape(str(label))}</b>",
+                styles["RoboBody"]
+            ),
+            Paragraph(
+                escape(str(value)),
+                styles["RoboBody"]
+            )
+        ])
+
+    information_table = Table(
+        information_rows,
+        colWidths=[140, 360],
+        hAlign="LEFT"
+    )
+
+    information_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [
+            colors.whitesmoke,
+            colors.white
+        ]),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6)
+    ]))
+
+    story.append(information_table)
+
+    # --------------------------------------------------------
+    # 6.5 INCIDENT SUMMARY
+    # --------------------------------------------------------
+
+    add_section("2. Incident Summary")
+
+    add_text(report_data["summary"])
+
+    # --------------------------------------------------------
+    # 6.6 OBSERVATIONS
+    # --------------------------------------------------------
+
+    add_section("3. Observations")
+
+    add_bullets(report_data["observations"])
+
+    # --------------------------------------------------------
+    # 6.7 MEASUREMENTS
+    # --------------------------------------------------------
+
+    add_section("4. Measurements")
+
+    measurement_rows = [
+        [
+            Paragraph(
+                "<b>Measurement</b>",
+                styles["RoboBody"]
+            ),
+            Paragraph(
+                "<b>Value</b>",
+                styles["RoboBody"]
+            )
+        ]
+    ]
+
+    measurements = report_data["measurements"]["values"]
+
+    for key, value in measurements.items():
+
+        measurement_rows.append([
+            Paragraph(
+                escape(key.replace("_", " ").title()),
+                styles["RoboBody"]
+            ),
+            Paragraph(
+                escape(str(value)),
+                styles["RoboBody"]
+            )
+        ])
+
+    measurement_table = Table(
+        measurement_rows,
+        colWidths=[250, 250],
+        repeatRows=1,
+        hAlign="LEFT"
+    )
+
+    measurement_table.setStyle(TableStyle([
+        (
+            "BACKGROUND",
+            (0, 0),
+            (-1, 0),
+            colors.HexColor("#E8EEF5")
+        ),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6)
+    ]))
+
+    story.append(measurement_table)
+
+    story.append(Spacer(1, 8))
+
+    story.append(
+        Paragraph(
+            "Numerical measurements were independently checked "
+            "against the incident source data.",
+            styles["RoboSmall"]
+        )
+    )
+
+    # --------------------------------------------------------
+    # 6.8 TECHNICAL ASSESSMENT
+    # --------------------------------------------------------
+
+    add_section("5. Technical Assessment")
+
+    add_text(report_data["technical_assessment"])
+
+    # --------------------------------------------------------
+    # 6.9 POSSIBLE CAUSES
+    # --------------------------------------------------------
+
+    add_section("6. Possible Causes")
+
+    add_bullets(report_data["possible_causes"])
+
+    # --------------------------------------------------------
+    # 6.10 ROOT CAUSE
+    # --------------------------------------------------------
+
+    add_section("7. Root Cause")
+
+    if report_data["root_cause_confirmed"]:
+
+        add_text("Root cause confirmed.")
+
+    else:
+
+        add_text("Root cause not confirmed.")
+
+    if report_data.get("root_cause"):
+
+        add_text(report_data["root_cause"])
+
+    # --------------------------------------------------------
+    # 6.11 RECOMMENDED ACTIONS
+    # --------------------------------------------------------
+
+    add_section("8. Recommended Actions")
+
+    add_bullets(report_data["recommended_actions"])
+
+    # --------------------------------------------------------
+    # 6.12 INVESTIGATION STATUS
+    # --------------------------------------------------------
+
+    add_section("9. Investigation Status")
+
+    add_text(report_data["investigation_status"])
+
+    # --------------------------------------------------------
+    # 6.13 PAGE NUMBERS
+    # --------------------------------------------------------
+
+    def add_page_number(canvas, doc):
+
+        canvas.saveState()
+
+        canvas.setFont("Helvetica", 8)
+
+        canvas.setFillColor(colors.grey)
+
+        canvas.drawRightString(
+            A4[0] - 45,
+            25,
+            f"Page {doc.page}"
+        )
+
+        canvas.drawString(
+            45,
+            25,
+            "RoboOps AI | Incident Investigation"
+        )
+
+        canvas.restoreState()
+
+    # --------------------------------------------------------
+    # 6.14 BUILD PDF
+    # --------------------------------------------------------
+
+    document.build(
+        story,
+        onFirstPage=add_page_number,
+        onLaterPages=add_page_number
+    )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+
+# ============================================================
+# 7. CREATE INTERACTIVE TELEMETRY CHART
 # ============================================================
 
 def create_telemetry_chart(
@@ -337,7 +733,7 @@ def create_telemetry_chart(
 
 
 # ============================================================
-# 7. DISPLAY INCIDENT TELEMETRY
+# 8. DISPLAY INCIDENT TELEMETRY
 # ============================================================
 
 def display_incident_telemetry(incident, telemetry):
@@ -360,7 +756,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.1 SELECT TIME WINDOW
+    # 8.1 SELECT TIME WINDOW
     # --------------------------------------------------------
 
     st.markdown("### Telemetry Time Window")
@@ -385,7 +781,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.2 FILTER TELEMETRY
+    # 8.2 FILTER TELEMETRY
     # --------------------------------------------------------
 
     incident_telemetry = telemetry[
@@ -408,7 +804,7 @@ def display_incident_telemetry(incident, telemetry):
         return
 
     # --------------------------------------------------------
-    # 7.3 DISPLAY TELEMETRY INFORMATION
+    # 8.3 DISPLAY TELEMETRY INFORMATION
     # --------------------------------------------------------
 
     col1, col2, col3 = st.columns(3)
@@ -437,7 +833,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.4 VELOCITY GRAPH
+    # 8.4 VELOCITY GRAPH
     # --------------------------------------------------------
 
     st.markdown("### 1. Robot Velocity")
@@ -459,7 +855,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.5 WHEEL SPEED GRAPH
+    # 8.5 WHEEL SPEED GRAPH
     # --------------------------------------------------------
 
     st.markdown("### 2. Wheel Speeds")
@@ -484,7 +880,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.6 MOTOR CURRENT GRAPH
+    # 8.6 MOTOR CURRENT GRAPH
     # --------------------------------------------------------
 
     st.markdown("### 3. Motor Current")
@@ -506,7 +902,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.7 BATTERY LEVEL GRAPH
+    # 8.7 BATTERY LEVEL GRAPH
     # --------------------------------------------------------
 
     st.markdown("### 4. Battery Level")
@@ -528,7 +924,7 @@ def display_incident_telemetry(incident, telemetry):
     )
 
     # --------------------------------------------------------
-    # 7.8 RAW TELEMETRY DATA
+    # 8.8 RAW TELEMETRY DATA
     # --------------------------------------------------------
 
     with st.expander("View Incident Telemetry Data"):
@@ -541,7 +937,7 @@ def display_incident_telemetry(incident, telemetry):
 
 
 # ============================================================
-# 8. DISPLAY FOLLOW-UP INVESTIGATION CHATBOT
+# 9. DISPLAY FOLLOW-UP INVESTIGATION CHATBOT
 # ============================================================
 
 def display_investigation_chatbot():
@@ -566,7 +962,7 @@ def display_investigation_chatbot():
     )
 
     # --------------------------------------------------------
-    # 8.1 DISPLAY PREVIOUS CHAT MESSAGES
+    # 9.1 DISPLAY PREVIOUS CHAT MESSAGES
     # --------------------------------------------------------
 
     for message in st.session_state.chat_messages:
@@ -575,7 +971,7 @@ def display_investigation_chatbot():
             st.markdown(message["content"])
 
     # --------------------------------------------------------
-    # 8.2 RECEIVE USER QUESTION
+    # 9.2 RECEIVE USER QUESTION
     # --------------------------------------------------------
 
     question = st.chat_input(
@@ -594,7 +990,7 @@ def display_investigation_chatbot():
             st.markdown(question)
 
         # ----------------------------------------------------
-        # 8.3 CALL AGENT 2
+        # 9.3 CALL AGENT 2
         # ----------------------------------------------------
 
         with st.chat_message("assistant"):
@@ -603,7 +999,7 @@ def display_investigation_chatbot():
 
                 try:
 
-                    # Include the report only in the first question
+                    # Include report only in first question
                     first_message = (
                         not st.session_state.chat_initialized
                     )
@@ -614,13 +1010,12 @@ def display_investigation_chatbot():
                         first_message=first_message
                     )
 
-                    # Mark the conversation as initialized
-                    # only after the agent responds successfully
+                    # Mark initialized only after success
                     st.session_state.chat_initialized = True
 
                     st.markdown(answer)
 
-                    # Store the assistant response
+                    # Store assistant response
                     st.session_state.chat_messages.append({
                         "role": "assistant",
                         "content": answer
@@ -634,7 +1029,7 @@ def display_investigation_chatbot():
 
 
 # ============================================================
-# 9. SIDEBAR NAVIGATION
+# 10. SIDEBAR NAVIGATION
 # ============================================================
 
 with st.sidebar:
@@ -660,7 +1055,7 @@ with st.sidebar:
 
 
 # ============================================================
-# 10. FLEET OVERVIEW PAGE
+# 11. FLEET OVERVIEW PAGE
 # ============================================================
 
 if page == "Fleet Overview":
@@ -682,7 +1077,7 @@ if page == "Fleet Overview":
     )
 
     # --------------------------------------------------------
-    # 10.1 DISPLAY FLEET METRICS
+    # 11.1 DISPLAY FLEET METRICS
     # --------------------------------------------------------
 
     col1, col2, col3, col4 = st.columns(4)
@@ -709,7 +1104,7 @@ if page == "Fleet Overview":
         )
 
     # --------------------------------------------------------
-    # 10.2 INCIDENT DISTRIBUTION
+    # 11.2 INCIDENT DISTRIBUTION
     # --------------------------------------------------------
 
     st.divider()
@@ -730,7 +1125,7 @@ if page == "Fleet Overview":
     )
 
     # --------------------------------------------------------
-    # 10.3 INCIDENTS PER ROBOT
+    # 11.3 INCIDENTS PER ROBOT
     # --------------------------------------------------------
 
     st.divider()
@@ -752,7 +1147,7 @@ if page == "Fleet Overview":
 
 
 # ============================================================
-# 11. INCIDENT EXPLORER PAGE
+# 12. INCIDENT EXPLORER PAGE
 # ============================================================
 
 elif page == "Incident Explorer":
@@ -772,7 +1167,7 @@ elif page == "Incident Explorer":
     )
 
     # --------------------------------------------------------
-    # 11.1 INCIDENT FILTERS
+    # 12.1 INCIDENT FILTERS
     # --------------------------------------------------------
 
     st.subheader("Filter Incidents")
@@ -800,7 +1195,7 @@ elif page == "Incident Explorer":
         )
 
     # --------------------------------------------------------
-    # 11.2 APPLY FILTERS
+    # 12.2 APPLY FILTERS
     # --------------------------------------------------------
 
     filtered_incidents = incidents_df.copy()
@@ -819,7 +1214,7 @@ elif page == "Incident Explorer":
         ]
 
     # --------------------------------------------------------
-    # 11.3 DISPLAY INCIDENT TABLE
+    # 12.3 DISPLAY INCIDENT TABLE
     # --------------------------------------------------------
 
     st.subheader("Detected Incidents")
@@ -862,7 +1257,7 @@ elif page == "Incident Explorer":
     )
 
     # --------------------------------------------------------
-    # 11.4 DISPLAY SELECTED INCIDENT DETAILS
+    # 12.4 DISPLAY SELECTED INCIDENT DETAILS
     # --------------------------------------------------------
 
     st.divider()
@@ -933,7 +1328,7 @@ elif page == "Incident Explorer":
 
 
 # ============================================================
-# 12. AI INVESTIGATION PAGE
+# 13. AI INVESTIGATION PAGE
 # ============================================================
 
 elif page == "AI Investigation":
@@ -948,7 +1343,7 @@ elif page == "AI Investigation":
     st.divider()
 
     # --------------------------------------------------------
-    # 12.1 SELECT INCIDENT
+    # 13.1 SELECT INCIDENT
     # --------------------------------------------------------
 
     incident_ids = sorted(
@@ -980,7 +1375,7 @@ elif page == "AI Investigation":
         )
 
     # --------------------------------------------------------
-    # 12.2 RUN AGENT 1 INVESTIGATION
+    # 13.2 RUN AGENT 1 INVESTIGATION
     # --------------------------------------------------------
 
     if st.button(
@@ -1034,7 +1429,7 @@ elif page == "AI Investigation":
                 )
 
                 # ------------------------------------------------
-                # 12.3 VERIFY THE REPORT
+                # 13.3 VERIFY THE REPORT
                 # ------------------------------------------------
 
                 if structured_report is None:
@@ -1062,7 +1457,7 @@ elif page == "AI Investigation":
                         )
 
                         # ----------------------------------------
-                        # 12.4 INITIALIZE AGENT 2 CONTEXT
+                        # 13.4 INITIALIZE AGENT 2 CONTEXT
                         # ----------------------------------------
 
                         st.session_state.chat_context = (
@@ -1089,7 +1484,7 @@ elif page == "AI Investigation":
                 )
 
     # ========================================================
-    # 12.5 DISPLAY SAVED INVESTIGATION RESULTS
+    # 13.5 DISPLAY SAVED INVESTIGATION RESULTS
     # ========================================================
 
     if (
@@ -1109,6 +1504,32 @@ elif page == "AI Investigation":
         display_incident_report(
             st.session_state.investigation_report
         )
+
+        # ----------------------------------------------------
+        # 13.6 EXPORT VERIFIED REPORT AS PDF
+        # ----------------------------------------------------
+
+        try:
+
+            pdf_bytes = generate_incident_pdf(
+                st.session_state.investigation_report
+            )
+
+            st.download_button(
+                label="📄 Download Investigation Report (PDF)",
+                data=pdf_bytes,
+                file_name=(
+                    f"RoboOps_Incident_"
+                    f"{selected_incident_id}_Report.pdf"
+                ),
+                mime="application/pdf"
+            )
+
+        except Exception as error:
+
+            st.error(
+                f"PDF generation failed: {error}"
+            )
 
         st.divider()
 
